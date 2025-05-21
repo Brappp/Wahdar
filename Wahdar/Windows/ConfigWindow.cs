@@ -13,10 +13,7 @@ public class ConfigWindow : Window, IDisposable
 
     public ConfigWindow(Plugin plugin) : base("Wahdar Configuration")
     {
-        Flags = ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollWithMouse;
-
-        Size = new Vector2(400, 500);
-        SizeCondition = ImGuiCond.Always;
+        Flags = ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.AlwaysAutoResize;
 
         Configuration = plugin.Configuration;
         Plugin = plugin;
@@ -26,14 +23,6 @@ public class ConfigWindow : Window, IDisposable
 
     public override void PreDraw()
     {
-        if (Configuration.IsConfigWindowMovable)
-        {
-            Flags &= ~ImGuiWindowFlags.NoMove;
-        }
-        else
-        {
-            Flags |= ImGuiWindowFlags.NoMove;
-        }
     }
 
     public override void Draw()
@@ -75,13 +64,9 @@ public class ConfigWindow : Window, IDisposable
         {
             Configuration.ShowRadarWindow = showRadar;
             Configuration.Save();
-        }
-        
-        var movable = Configuration.IsConfigWindowMovable;
-        if (ImGui.Checkbox("Movable Config Window", ref movable))
-        {
-            Configuration.IsConfigWindowMovable = movable;
-            Configuration.Save();
+            
+            // Apply visibility change directly
+            Plugin.ApplyRadarVisibility();
         }
         
         ImGui.Separator();
@@ -94,12 +79,37 @@ public class ConfigWindow : Window, IDisposable
             Configuration.Save();
         }
         
-        var centerOnPlayer = Configuration.CenterOnPlayer;
-        if (ImGui.Checkbox("Center on Player", ref centerOnPlayer))
+        var rotateWithCamera = Configuration.RotateWithCamera;
+        if (ImGui.Checkbox("Rotate with Camera", ref rotateWithCamera))
         {
-            Configuration.CenterOnPlayer = centerOnPlayer;
+            Configuration.RotateWithCamera = rotateWithCamera; 
             Configuration.Save();
         }
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker("When enabled, the radar will rotate to match your camera orientation");
+        
+        var showRadiusCircles = Configuration.ShowRadiusCircles;
+        if (ImGui.Checkbox("Show Radius Circles", ref showRadiusCircles))
+        {
+            Configuration.ShowRadiusCircles = showRadiusCircles;
+            Configuration.Save();
+        }
+        
+        var drawLinesToPlayers = Configuration.DrawPlayerLines;
+        if (ImGui.Checkbox("Draw Lines to Players", ref drawLinesToPlayers))
+        {
+            Configuration.DrawPlayerLines = drawLinesToPlayers;
+            Configuration.Save();
+        }
+        
+        var transparentBackground = Configuration.TransparentBackground;
+        if (ImGui.Checkbox("Transparent Background", ref transparentBackground))
+        {
+            Configuration.TransparentBackground = transparentBackground;
+            Configuration.Save();
+        }
+        ImGui.SameLine();
+        ImGuiComponents.HelpMarker("Makes the radar window background transparent");
         
         ImGui.Separator();
         ImGui.TextUnformatted("Display Filters");
@@ -122,15 +132,6 @@ public class ConfigWindow : Window, IDisposable
         if (ImGui.Checkbox("Show NPCs", ref showNPCs))
         {
             Configuration.ShowNPCs = showNPCs;
-            Configuration.Save();
-        }
-        
-        ImGui.Separator();
-        
-        var scale = Configuration.RadarScale;
-        if (ImGui.SliderFloat("Radar Scale", ref scale, 0.5f, 2.0f, "%.1f"))
-        {
-            Configuration.RadarScale = scale;
             Configuration.Save();
         }
     }
@@ -167,13 +168,6 @@ public class ConfigWindow : Window, IDisposable
         if (ImGui.Checkbox("Draw Object Dots", ref drawObjectDots))
         {
             Configuration.DrawObjectDots = drawObjectDots;
-            Configuration.Save();
-        }
-        
-        var drawLinesToPlayers = Configuration.DrawLinesToPlayers;
-        if (ImGui.Checkbox("Draw Lines to Players", ref drawLinesToPlayers))
-        {
-            Configuration.DrawLinesToPlayers = drawLinesToPlayers;
             Configuration.Save();
         }
         
@@ -227,15 +221,24 @@ public class ConfigWindow : Window, IDisposable
                 Configuration.Save();
             }
             
+            var showAlertRing = Configuration.ShowAlertRing;
+            if (ImGui.Checkbox("Show Alert Ring on Radar", ref showAlertRing))
+            {
+                Configuration.ShowAlertRing = showAlertRing;
+                Configuration.Save();
+            }
+            ImGui.SameLine();
+            ImGuiComponents.HelpMarker("Displays a red ring on the radar at your alert distance");
+            
             var cooldown = Configuration.PlayerProximityAlertCooldown;
             if (ImGui.SliderFloat("Alert Cooldown", ref cooldown, 1f, 30f, "%.1f seconds"))
             {
                 Configuration.PlayerProximityAlertCooldown = cooldown;
                 Configuration.Save();
             }
-            ImGuiComponents.HelpMarker("How long to wait between alerts so they don't drive you crazy");
+            ImGui.SameLine();
+            ImGuiComponents.HelpMarker("How long to wait between alerts");
             
-            // Sound options
             string[] soundOptions = { "Sound 1 (Ping)", "Sound 2 (Alert)", "Sound 3 (Notification)", "Sound 4 (Alarm)" };
             int currentSound = Configuration.PlayerProximityAlertSound;
             if (ImGui.Combo("Alert Sound", ref currentSound, soundOptions, soundOptions.Length))
@@ -243,6 +246,52 @@ public class ConfigWindow : Window, IDisposable
                 Configuration.PlayerProximityAlertSound = currentSound;
                 Configuration.Save();
             }
+            
+            ImGui.Separator();
+            ImGui.TextUnformatted("Alert Frequency");
+            ImGui.Indent(20);
+            
+            int currentFrequency = (int)Configuration.PlayerAlertFrequency;
+            bool changed = false;
+            
+            bool isOnlyOnce = currentFrequency == 0;
+            if (ImGui.RadioButton("Only Once", isOnlyOnce))
+            {
+                currentFrequency = 0;
+                changed = true;
+            }
+            ImGui.SameLine();
+            ImGui.TextColored(new Vector4(0.7f, 0.7f, 0.7f, 1.0f), "Alert once per player until restart");
+            
+            bool isEveryInterval = currentFrequency == 1;
+            if (ImGui.RadioButton("Every Interval", isEveryInterval))
+            {
+                currentFrequency = 1;
+                changed = true;
+            }
+            ImGui.SameLine();
+            ImGui.TextColored(new Vector4(0.7f, 0.7f, 0.7f, 1.0f), "Alert every cooldown period");
+            
+            bool isEnterLeaveReenter = currentFrequency == 2;
+            if (ImGui.RadioButton("Enter/Leave/Reenter", isEnterLeaveReenter))
+            {
+                currentFrequency = 2;
+                changed = true;
+            }
+            ImGui.SameLine();
+            ImGui.TextColored(new Vector4(0.7f, 0.7f, 0.7f, 1.0f), "Alert on enter, then only after leaving and returning");
+            
+            if (changed)
+            {
+                Configuration.PlayerAlertFrequency = (Configuration.AlertFrequencyMode)currentFrequency;
+                Configuration.Save();
+                
+                // Clear alert tracking data when frequency mode changes
+                Plugin.ClearAlertData();
+            }
+            
+            ImGui.Unindent(20);
+            ImGui.Separator();
             
             if (ImGui.Button("Test Sound"))
             {
@@ -258,9 +307,18 @@ public class ConfigWindow : Window, IDisposable
         ImGui.TextUnformatted("Color Settings");
         ImGui.Separator();
         
-        ImGui.TextUnformatted("Window Colors");
+        ImGui.TextUnformatted("Radar Window Colors");
         
-        // In-game colors
+        var radarRadiusColor = new Vector4(0.5f, 0.5f, 0.5f, 0.7f);
+        if (ImGui.ColorEdit4("Radius Circle Color", ref radarRadiusColor))
+        {
+        }
+        
+        var radarPlayerLineColor = new Vector4(0.0f, 0.5f, 1.0f, 0.7f);
+        if (ImGui.ColorEdit4("Player Line Color", ref radarPlayerLineColor))
+        {
+        }
+        
         ImGui.Separator();
         ImGui.TextUnformatted("In-Game Overlay Colors");
         

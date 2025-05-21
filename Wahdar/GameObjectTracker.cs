@@ -1,107 +1,119 @@
-using System;
-using System.Collections.Generic;
-using System.Numerics;
 using Dalamud.Game.ClientState.Objects.Enums;
 using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
+using System.Collections.Generic;
+using System.Numerics;
 
 namespace Wahdar
 {
-    public class GameObjectTracker : IDisposable
+    public enum ObjectCategory
     {
-        private Plugin Plugin { get; }
-        private List<TrackedObject> TrackedObjects { get; } = new();
+        Unknown,
+        Player,
+        Monster,
+        NPC,
+        FriendlyNPC
+    }
+    
+    public class TrackedObject
+    {
+        public string ObjectId { get; }
+        public string Name { get; }
+        public ObjectCategory Category { get; }
+        public Vector3 Position { get; }
+        public float Distance { get; }
         
-        public GameObjectTracker(Plugin plugin)
+        public TrackedObject(string objectId, string name, ObjectCategory category, Vector3 position, float distance)
         {
-            Plugin = plugin;
-            Plugin.Framework.Update += OnFrameworkUpdate;
+            ObjectId = objectId;
+            Name = name;
+            Category = category;
+            Position = position;
+            Distance = distance;
+        }
+    }
+    
+    public class GameObjectTracker
+    {
+        private readonly IObjectTable _objectTable;
+        private readonly IClientState _clientState;
+        private readonly Configuration _configuration;
+        
+        public GameObjectTracker(IObjectTable objectTable, Configuration configuration)
+        {
+            _objectTable = objectTable;
+            _clientState = Plugin.ClientState;
+            _configuration = configuration;
         }
         
-        public void Dispose()
+        public List<TrackedObject> GetTrackedObjects()
         {
-            Plugin.Framework.Update -= OnFrameworkUpdate;
-        }
-        
-        private void OnFrameworkUpdate(IFramework framework)
-        {
-            UpdateTrackedObjects();
-        }
-        
-        private void UpdateTrackedObjects()
-        {
-            var player = Plugin.ClientState.LocalPlayer;
-            if (player == null) return;
+            var player = _clientState.LocalPlayer;
+            if (player == null)
+                return new List<TrackedObject>();
+                
+            var result = new List<TrackedObject>();
             
-            TrackedObjects.Clear();
-            
-            foreach (var obj in Plugin.ObjectTable)
+            foreach (var obj in _objectTable)
             {
-                if (obj == null || obj.GameObjectId == player.GameObjectId) continue;
-                
+                if (obj == null)
+                    continue;
+                    
+                if (obj.Address == player.Address)
+                    continue;
+                    
                 var distance = Vector3.Distance(player.Position, obj.Position);
-                if (distance > Plugin.Configuration.DetectionRadius) continue;
-                
-                ObjectCategory category = GetObjectCategory(obj);
-                
-                if (!ShouldDisplayObject(category)) continue;
-                
-                TrackedObjects.Add(new TrackedObject
-                {
-                    GameObject = obj,
-                    Position = obj.Position,
-                    Distance = distance,
-                    Category = category,
-                    Name = obj.Name.TextValue ?? "Unknown"
-                });
+                if (distance > _configuration.DetectionRadius)
+                    continue;
+                    
+                var category = GetCategory(obj);
+                if (!ShouldDisplay(category))
+                    continue;
+                    
+                result.Add(new TrackedObject(
+                    obj.Address.ToString(),
+                    obj.Name.TextValue,
+                    category,
+                    obj.Position,
+                    distance
+                ));
             }
+            
+            return result;
         }
         
-        private ObjectCategory GetObjectCategory(IGameObject obj)
+        private ObjectCategory GetCategory(IGameObject obj)
         {
             switch (obj.ObjectKind)
             {
                 case ObjectKind.Player:
                     return ObjectCategory.Player;
+                    
                 case ObjectKind.BattleNpc:
-                    var isFriendly = obj.SubKind == 1;
-                    return isFriendly ? ObjectCategory.FriendlyNPC : ObjectCategory.Monster;
+                    return IsFriendlyNpc(obj) ? ObjectCategory.NPC : ObjectCategory.Monster;
+                    
                 case ObjectKind.EventNpc:
-                    return ObjectCategory.NPC;
+                    return ObjectCategory.FriendlyNPC;
+                    
                 default:
-                    return ObjectCategory.Other;
+                    return ObjectCategory.Unknown;
             }
         }
         
-        private bool ShouldDisplayObject(ObjectCategory category)
+        private bool IsFriendlyNpc(IGameObject obj)
+        {
+            return (obj.SubKind != 0);
+        }
+        
+        private bool ShouldDisplay(ObjectCategory category)
         {
             return category switch
             {
-                ObjectCategory.Monster => Plugin.Configuration.ShowMonsters,
-                ObjectCategory.Player => Plugin.Configuration.ShowPlayers,
-                ObjectCategory.NPC or ObjectCategory.FriendlyNPC => Plugin.Configuration.ShowNPCs,
+                ObjectCategory.Player => _configuration.ShowPlayers,
+                ObjectCategory.Monster => _configuration.ShowMonsters,
+                ObjectCategory.NPC or ObjectCategory.FriendlyNPC => _configuration.ShowNPCs,
                 _ => false
             };
         }
-        
-        public IReadOnlyList<TrackedObject> GetTrackedObjects() => TrackedObjects;
-    }
-    
-    public enum ObjectCategory
-    {
-        Player,
-        Monster,
-        NPC,
-        FriendlyNPC,
-        Other
-    }
-    
-    public class TrackedObject
-    {
-        public IGameObject? GameObject { get; set; }
-        public Vector3 Position { get; set; }
-        public float Distance { get; set; }
-        public ObjectCategory Category { get; set; }
-        public string Name { get; set; } = string.Empty;
     }
 } 

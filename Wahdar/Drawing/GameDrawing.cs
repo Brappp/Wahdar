@@ -1,5 +1,6 @@
 using System;
 using System.Numerics;
+using Dalamud.Game.ClientState.Objects.Types;
 using Dalamud.Plugin.Services;
 using ImGuiNET;
 
@@ -57,29 +58,19 @@ namespace Wahdar.Drawing
 
         public static void DrawDot(Vector3 position, float thickness, Vector4 color)
         {
-            DrawDot(position, thickness, ImGui.ColorConvertFloat4ToU32(color));
-        }
-
-        public static void DrawDot(Vector3 position, float thickness, uint color)
-        {
             if (!_overlayDrawing) return;
             
             if (Plugin.GameGui.WorldToScreen(position, out Vector2 screenPos))
             {
                 _drawList.AddCircleFilled(
-                    new Vector2(screenPos.X, screenPos.Y),
+                    screenPos,
                     thickness,
-                    color,
+                    ImGui.ColorConvertFloat4ToU32(color),
                     12);
             }
         }
 
         public static void DrawLine(Vector3 start, Vector3 end, float thickness, Vector4 color)
-        {
-            DrawLine(start, end, thickness, ImGui.ColorConvertFloat4ToU32(color));
-        }
-
-        public static void DrawLine(Vector3 start, Vector3 end, float thickness, uint color)
         {
             if (!_overlayDrawing) return;
             
@@ -89,17 +80,12 @@ namespace Wahdar.Drawing
                 _drawList.AddLine(
                     startPos,
                     endPos,
-                    color,
+                    ImGui.ColorConvertFloat4ToU32(color),
                     thickness);
             }
         }
 
-        public static void DrawText(Vector3 position, string text, Vector4 color, float size = 1.0f)
-        {
-            DrawText(position, text, ImGui.ColorConvertFloat4ToU32(color), size);
-        }
-
-        public static void DrawText(Vector3 position, string text, uint color, float size = 1.0f)
+        public static void DrawText(Vector3 position, string text, Vector4 color)
         {
             if (!_overlayDrawing) return;
             
@@ -107,44 +93,96 @@ namespace Wahdar.Drawing
             {
                 var textSize = ImGui.CalcTextSize(text);
                 _drawList.AddText(
-                    ImGui.GetFont(),
-                    ImGui.GetFontSize() * size,
-                    new Vector2(screenPos.X - textSize.X / 2, screenPos.Y - textSize.Y / 2),
-                    color,
+                    screenPos - textSize / 2,
+                    ImGui.ColorConvertFloat4ToU32(color),
                     text);
             }
         }
 
-        public static void DrawCircle(Vector3 position, float radius, Vector4 color, float thickness = 1.0f, int segments = 32)
+        public static void DrawCircle(Vector3 position, float radius, Vector4 color, float thickness = 1.0f)
         {
             if (!_overlayDrawing) return;
             
-            var points = new Vector2[segments];
-            var screenPoints = new bool[segments];
+            const int segments = 36;
+            float angleStep = MathF.PI * 2.0f / segments;
             
-            for (int i = 0; i < segments; i++)
+            Vector2? prevScreenPos = null;
+            bool prevValid = false;
+            
+            for (int i = 0; i <= segments; i++)
             {
-                float angle = i * MathF.PI * 2 / segments;
-                Vector3 pointPosition = position + new Vector3(
-                    radius * MathF.Cos(angle),
-                    0,
-                    radius * MathF.Sin(angle)
-                );
+                float angle = i * angleStep;
+                float x = position.X + radius * MathF.Cos(angle);
+                float z = position.Z + radius * MathF.Sin(angle);
                 
-                screenPoints[i] = Plugin.GameGui.WorldToScreen(pointPosition, out points[i]);
-            }
-            
-            uint colorU32 = ImGui.ColorConvertFloat4ToU32(color);
-            
-            for (int i = 0; i < segments; i++)
-            {
-                int next = (i + 1) % segments;
+                Vector3 worldPos = new Vector3(x, position.Y, z);
+                bool valid = Plugin.GameGui.WorldToScreen(worldPos, out Vector2 screenPos);
                 
-                if (screenPoints[i] && screenPoints[next])
+                if (valid && prevValid && prevScreenPos.HasValue)
                 {
-                    _drawList.AddLine(points[i], points[next], colorU32, thickness);
+                    _drawList.AddLine(
+                        prevScreenPos.Value, 
+                        screenPos, 
+                        ImGui.ColorConvertFloat4ToU32(color), 
+                        thickness);
                 }
+                
+                prevScreenPos = screenPos;
+                prevValid = valid;
             }
+        }
+        
+        public static void DrawDirectionalIndicator(Vector3 position, float rotation, float size, Vector4 circleColor, Vector4 arrowColor)
+        {
+            if (!_overlayDrawing) return;
+            
+            if (!Plugin.GameGui.WorldToScreen(position, out Vector2 centerScreenPos))
+                return;
+                
+            _drawList.AddCircleFilled(
+                centerScreenPos, 
+                size, 
+                ImGui.ColorConvertFloat4ToU32(circleColor),
+                12);
+            
+            float dirLength = size * 1.5f;
+            float arrowSize = size * 0.8f;
+            float arrowAngle = MathF.PI / 6;
+            
+            Vector2 dirVector = new Vector2(
+                MathF.Sin(rotation),
+                -MathF.Cos(rotation)
+            );
+            
+            Vector2 arrowTip = centerScreenPos + dirVector * dirLength;
+            
+            _drawList.AddLine(
+                centerScreenPos, 
+                arrowTip, 
+                ImGui.ColorConvertFloat4ToU32(arrowColor), 
+                2.0f);
+            
+            Vector2 leftPoint = arrowTip - new Vector2(
+                arrowSize * MathF.Sin(rotation - arrowAngle),
+                -arrowSize * MathF.Cos(rotation - arrowAngle)
+            );
+            
+            Vector2 rightPoint = arrowTip - new Vector2(
+                arrowSize * MathF.Sin(rotation + arrowAngle),
+                -arrowSize * MathF.Cos(rotation + arrowAngle)
+            );
+            
+            _drawList.AddLine(
+                arrowTip, 
+                leftPoint, 
+                ImGui.ColorConvertFloat4ToU32(arrowColor), 
+                2.0f);
+                
+            _drawList.AddLine(
+                arrowTip, 
+                rightPoint, 
+                ImGui.ColorConvertFloat4ToU32(arrowColor), 
+                2.0f);
         }
     }
 } 

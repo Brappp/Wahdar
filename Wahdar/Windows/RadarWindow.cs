@@ -9,11 +9,10 @@ namespace Wahdar.Windows
     {
         private Plugin Plugin { get; }
         
-        // Radar display options
-        private bool ShowRadiusCircle = true;
-        private bool DrawLinesToPlayers = true;
         private Vector4 RadiusCircleColor = new Vector4(0.5f, 0.5f, 0.5f, 0.7f);
         private Vector4 PlayerLineColor = new Vector4(0.0f, 0.5f, 1.0f, 0.7f);
+        private Vector4 AlertRingColor = new Vector4(1.0f, 0.1f, 0.1f, 0.8f);
+        private Vector4 AlertedPlayerHighlight = new Vector4(1.0f, 0.3f, 0.3f, 0.9f);
         
         public RadarWindow(Plugin plugin) : base("Wahdar Radar##WahdarRadar")
         {
@@ -21,14 +20,29 @@ namespace Wahdar.Windows
             
             SizeConstraints = new WindowSizeConstraints
             {
-                MinimumSize = new Vector2(200, 200),
-                MaximumSize = new Vector2(500, 500)
+                MinimumSize = new Vector2(150, 150),
+                MaximumSize = new Vector2(800, 800)
             };
             
-            Flags = ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse;
+            Flags = ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoCollapse;
         }
         
         public void Dispose() { }
+        
+        public override void PreDraw()
+        {
+            if (Plugin.Configuration.TransparentBackground)
+            {
+                Flags |= ImGuiWindowFlags.NoBackground;
+                Flags |= ImGuiWindowFlags.NoTitleBar;
+                Flags &= ~ImGuiWindowFlags.AlwaysAutoResize;
+            }
+            else
+            {
+                Flags &= ~ImGuiWindowFlags.NoBackground;
+                Flags &= ~ImGuiWindowFlags.NoTitleBar;
+            }
+        }
         
         public override void Draw()
         {
@@ -39,95 +53,59 @@ namespace Wahdar.Windows
                 return;
             }
             
+            float cameraRotation = 0f;
+            if (Plugin.Configuration.RotateWithCamera)
+            {
+                try
+                {
+                    cameraRotation = player.Rotation;
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.Debug($"Failed to get player rotation: {ex.Message}");
+                }
+            }
+            
             var trackedObjects = Plugin.ObjectTracker.GetTrackedObjects();
             var drawList = ImGui.GetWindowDrawList();
             
-            // Top controls section with better layout
-            if (ImGui.Button("Settings"))
+            var windowSize = ImGui.GetWindowSize();
+            var contentRegion = ImGui.GetContentRegionAvail();
+            
+            var buttonText = "Settings";
+            var buttonSize = ImGui.CalcTextSize(buttonText);
+            float buttonWidth = buttonSize.X + ImGui.GetStyle().FramePadding.X * 2;
+            float windowCenter = ImGui.GetWindowWidth() * 0.5f;
+            
+            ImGui.SetCursorPosX(windowCenter - buttonWidth * 0.5f);
+            
+            // Create centered button
+            if (ImGui.Button(buttonText))
             {
                 Plugin.ToggleConfigUI();
             }
             
-            ImGui.SameLine();
-            var radius = Plugin.Configuration.DetectionRadius;
-            if (ImGui.SliderFloat("##Radius", ref radius, 10f, 150f, "%.1f"))
-            {
-                Plugin.Configuration.DetectionRadius = radius;
-                Plugin.Configuration.Save();
-            }
-            ImGui.SameLine();
-            ImGui.Text("yalms");
+            // Account for Settings button height and padding
+            float buttonHeight = ImGui.GetItemRectSize().Y + ImGui.GetStyle().ItemSpacing.Y * 2;
             
-            // Add a subtle separator between controls and radar
-            ImGui.Separator();
+            // Use the full remaining space for the radar
+            var radarSize = Math.Min(contentRegion.X, contentRegion.Y - buttonHeight);
             
-            // Add toggles in a row
-            float controlWidth = ImGui.GetContentRegionAvail().X;
-            float checkboxWidth = controlWidth / 2 - 10;
+            // Add padding to center the radar
+            float centerPadX = (contentRegion.X - radarSize) * 0.5f;
+            if (centerPadX > 0)
+                ImGui.Indent(centerPadX);
             
-            ImGui.BeginGroup();
-            ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(5, 5));
-            
-            // First checkbox
-            ImGui.BeginChild("##LeftCheck", new Vector2(checkboxWidth, ImGui.GetFrameHeight()), false);
-            ImGui.Checkbox("Show Radius Circles", ref ShowRadiusCircle);
-            ImGui.EndChild();
-            
-            ImGui.SameLine();
-            
-            // Second checkbox
-            ImGui.BeginChild("##RightCheck", new Vector2(checkboxWidth, ImGui.GetFrameHeight()), false);
-            ImGui.Checkbox("Draw Lines to Players", ref DrawLinesToPlayers);
-            ImGui.EndChild();
-            
-            ImGui.PopStyleVar();
-            ImGui.EndGroup();
-            
-            // Draw a compact legend with better layout
-            ImGui.Spacing();
-            ImGui.BeginGroup();
-            ImGui.TextUnformatted("Legend:");
-            
-            float legendItemWidth = controlWidth / 2 - 10;
-            float legendIconSize = 8;
-            
-            // First row of legend
-            ImGui.BeginChild("##LegendRow1", new Vector2(controlWidth, ImGui.GetFrameHeight() + 2), false);
-            DrawLegendItem(drawList, "Monster", new Vector4(1, 0, 0, 1), legendIconSize);
-            
-            ImGui.SameLine(legendItemWidth);
-            
-            DrawLegendItem(drawList, "Player", new Vector4(0, 0, 1, 1), legendIconSize);
-            ImGui.EndChild();
-            
-            // Second row of legend
-            ImGui.BeginChild("##LegendRow2", new Vector2(controlWidth, ImGui.GetFrameHeight() + 2), false);
-            DrawLegendItem(drawList, "NPC", new Vector4(1, 1, 0, 1), legendIconSize);
-            
-            // Only add the line legend if lines are enabled
-            if (DrawLinesToPlayers)
-            {
-                ImGui.SameLine(legendItemWidth);
-                DrawLegendLine(drawList, "Distance", PlayerLineColor, legendIconSize);
-            }
-            ImGui.EndChild();
-            
-            ImGui.EndGroup();
-            
-            // Add a small space before the radar
-            ImGui.Spacing();
-            
-            // Calculate radar dimensions
-            var contentSize = ImGui.GetContentRegionAvail();
-            var radarSize = Math.Min(contentSize.X, contentSize.Y);
             var center = ImGui.GetCursorScreenPos() + new Vector2(radarSize / 2, radarSize / 2);
             
-            // Draw radar background
+            // Always draw the filled radar background circle
             drawList.AddCircleFilled(center, radarSize / 2, ImGui.ColorConvertFloat4ToU32(new Vector4(0.1f, 0.1f, 0.1f, 0.7f)));
+            
+            // Always draw the outline
             drawList.AddCircle(center, radarSize / 2, ImGui.ColorConvertFloat4ToU32(new Vector4(0.5f, 0.5f, 0.5f, 1.0f)));
             
             // Draw radius indicator circles if enabled
-            if (ShowRadiusCircle)
+            if (Plugin.Configuration.ShowRadiusCircles)
             {
                 // Draw multiple range rings
                 float[] rangeRings = { 0.25f, 0.5f, 0.75f, 1.0f };
@@ -151,6 +129,20 @@ namespace Wahdar.Windows
                     
                     // Calculate position for the label (top of the circle)
                     var labelPos = center - new Vector2(0, radarSize / 2 * rangeRings[i]);
+                    
+                    // Rotate label position if camera rotation is enabled
+                    if (Plugin.Configuration.RotateWithCamera)
+                    {
+                        float x = labelPos.X - center.X;
+                        float y = labelPos.Y - center.Y;
+                        
+                        // Rotate point around center
+                        float rotatedX = x * MathF.Cos(-cameraRotation) - y * MathF.Sin(-cameraRotation);
+                        float rotatedY = x * MathF.Sin(-cameraRotation) + y * MathF.Cos(-cameraRotation);
+                        
+                        labelPos = center + new Vector2(rotatedX, rotatedY);
+                    }
+                    
                     var distanceText = $"{Plugin.Configuration.DetectionRadius * rangeRings[i]:F0}";
                     var textSize = ImGui.CalcTextSize(distanceText);
                     
@@ -169,66 +161,162 @@ namespace Wahdar.Windows
                 }
             }
             
-            // Draw center point (player)
-            drawList.AddCircleFilled(center, 5, ImGui.ColorConvertFloat4ToU32(new Vector4(0, 1, 0, 1)));
+            // Draw alert distance ring if enabled
+            if (Plugin.Configuration.ShowAlertRing && Plugin.Configuration.EnablePlayerProximityAlert)
+            {
+                // Calculate the radius of the alert ring relative to the radar size
+                float alertRingRadius = (Plugin.Configuration.PlayerProximityAlertDistance / Plugin.Configuration.DetectionRadius) * (radarSize / 2);
+                
+                // Draw a red circle for the alert distance
+                drawList.AddCircle(
+                    center,
+                    alertRingRadius,
+                    ImGui.ColorConvertFloat4ToU32(AlertRingColor),
+                    48, // More segments for a smoother circle
+                    2.5f // Thicker line for visibility
+                );
+                
+                // Add a label showing the alert distance
+                var alertLabelPos = center - new Vector2(0, alertRingRadius);
+                
+                // Rotate label position if camera rotation is enabled
+                if (Plugin.Configuration.RotateWithCamera)
+                {
+                    float x = alertLabelPos.X - center.X;
+                    float y = alertLabelPos.Y - center.Y;
+                    
+                    // Rotate point around center
+                    float rotatedX = x * MathF.Cos(-cameraRotation) - y * MathF.Sin(-cameraRotation);
+                    float rotatedY = x * MathF.Sin(-cameraRotation) + y * MathF.Cos(-cameraRotation);
+                    
+                    alertLabelPos = center + new Vector2(rotatedX, rotatedY);
+                }
+                
+                var alertText = $"Alert: {Plugin.Configuration.PlayerProximityAlertDistance:F0}";
+                var alertTextSize = ImGui.CalcTextSize(alertText);
+                
+                // Draw the label with a colored background for emphasis
+                drawList.AddRectFilled(
+                    alertLabelPos - new Vector2(alertTextSize.X / 2 + 3, 0),
+                    alertLabelPos + new Vector2(alertTextSize.X / 2 + 3, alertTextSize.Y),
+                    ImGui.ColorConvertFloat4ToU32(new Vector4(0.7f, 0, 0, 0.7f))
+                );
+                
+                drawList.AddText(
+                    alertLabelPos - new Vector2(alertTextSize.X / 2, 0),
+                    ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 1.0f)),
+                    alertText
+                );
+            }
             
-            // Draw N/E/S/W direction indicators
+            float playerDotSize = 6.0f;
+            drawList.AddCircleFilled(center, playerDotSize, ImGui.ColorConvertFloat4ToU32(new Vector4(0, 1, 0, 1)));
+            
+            float rotationAngle = Plugin.Configuration.RotateWithCamera ? -cameraRotation : 0;
+            
             var directionIndicatorLength = radarSize * 0.05f;
-            var directionLabelOffset = radarSize * 0.07f;
+            var directionLabelOffset = radarSize * 0.48f;
             
-            // North indicator
-            drawList.AddLine(
-                center, 
-                center - new Vector2(0, directionIndicatorLength), 
-                ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 0.7f)), 
-                2.0f
-            );
+            Vector2 northPos = center + RotatePoint(new Vector2(0, -directionIndicatorLength), rotationAngle);
+            Vector2 eastPos = center + RotatePoint(new Vector2(directionIndicatorLength, 0), rotationAngle);
+            Vector2 southPos = center + RotatePoint(new Vector2(0, directionIndicatorLength), rotationAngle);
+            Vector2 westPos = center + RotatePoint(new Vector2(-directionIndicatorLength, 0), rotationAngle);
+            
+            Vector2 northLabelPos = center + RotatePoint(new Vector2(0, -directionLabelOffset), rotationAngle);
+            Vector2 eastLabelPos = center + RotatePoint(new Vector2(directionLabelOffset, 0), rotationAngle);
+            Vector2 southLabelPos = center + RotatePoint(new Vector2(0, directionLabelOffset), rotationAngle);
+            Vector2 westLabelPos = center + RotatePoint(new Vector2(-directionLabelOffset, 0), rotationAngle);
+            
+            (northLabelPos, southLabelPos) = (southLabelPos, northLabelPos);
+            
+            // Draw the direction indicators and labels
+            // North
             var northLabelSize = ImGui.CalcTextSize("N");
+            float labelScale = 1.2f; // Make labels slightly larger
+            
+            // Add background rectangle for North label - larger with higher contrast
+            drawList.AddRectFilled(
+                northLabelPos - new Vector2(northLabelSize.X / 2 * labelScale + 4, northLabelSize.Y * labelScale + 4),
+                northLabelPos + new Vector2(northLabelSize.X / 2 * labelScale + 4, 4),
+                ImGui.ColorConvertFloat4ToU32(new Vector4(0, 0, 0, 0.85f))
+            );
+            // Add outline to make it pop
+            drawList.AddRect(
+                northLabelPos - new Vector2(northLabelSize.X / 2 * labelScale + 4, northLabelSize.Y * labelScale + 4),
+                northLabelPos + new Vector2(northLabelSize.X / 2 * labelScale + 4, 4),
+                ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 0.9f)),
+                0, 0, 1.0f
+            );
+            // Draw text with brighter color
             drawList.AddText(
-                center - new Vector2(northLabelSize.X / 2, directionLabelOffset + northLabelSize.Y), 
-                ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 0.7f)), 
+                northLabelPos - new Vector2(northLabelSize.X / 2, northLabelSize.Y), 
+                ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 1.0f)), 
                 "N"
             );
             
-            // East indicator
-            drawList.AddLine(
-                center, 
-                center + new Vector2(directionIndicatorLength, 0), 
-                ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 0.7f)), 
-                2.0f
-            );
+            // East
             var eastLabelSize = ImGui.CalcTextSize("E");
+            // Add background rectangle for East label - larger with higher contrast
+            drawList.AddRectFilled(
+                eastLabelPos - new Vector2(4, eastLabelSize.Y / 2 * labelScale + 4),
+                eastLabelPos + new Vector2(eastLabelSize.X * labelScale + 4, eastLabelSize.Y / 2 * labelScale + 4),
+                ImGui.ColorConvertFloat4ToU32(new Vector4(0, 0, 0, 0.85f))
+            );
+            // Add outline to make it pop
+            drawList.AddRect(
+                eastLabelPos - new Vector2(4, eastLabelSize.Y / 2 * labelScale + 4),
+                eastLabelPos + new Vector2(eastLabelSize.X * labelScale + 4, eastLabelSize.Y / 2 * labelScale + 4),
+                ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 0.9f)),
+                0, 0, 1.0f
+            );
+            // Draw text with brighter color
             drawList.AddText(
-                center + new Vector2(directionLabelOffset, -eastLabelSize.Y / 2), 
-                ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 0.7f)), 
+                eastLabelPos - new Vector2(0, eastLabelSize.Y / 2), 
+                ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 1.0f)), 
                 "E"
             );
             
-            // South indicator
-            drawList.AddLine(
-                center, 
-                center + new Vector2(0, directionIndicatorLength), 
-                ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 0.7f)), 
-                2.0f
-            );
+            // South
             var southLabelSize = ImGui.CalcTextSize("S");
+            // Add background rectangle for South label - larger with higher contrast
+            drawList.AddRectFilled(
+                southLabelPos - new Vector2(southLabelSize.X / 2 * labelScale + 4, 4),
+                southLabelPos + new Vector2(southLabelSize.X / 2 * labelScale + 4, southLabelSize.Y * labelScale + 4),
+                ImGui.ColorConvertFloat4ToU32(new Vector4(0, 0, 0, 0.85f))
+            );
+            // Add outline to make it pop
+            drawList.AddRect(
+                southLabelPos - new Vector2(southLabelSize.X / 2 * labelScale + 4, 4),
+                southLabelPos + new Vector2(southLabelSize.X / 2 * labelScale + 4, southLabelSize.Y * labelScale + 4),
+                ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 0.9f)),
+                0, 0, 1.0f
+            );
+            // Draw text with brighter color
             drawList.AddText(
-                center + new Vector2(-southLabelSize.X / 2, directionLabelOffset), 
-                ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 0.7f)), 
+                southLabelPos - new Vector2(southLabelSize.X / 2, 0), 
+                ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 1.0f)), 
                 "S"
             );
             
-            // West indicator
-            drawList.AddLine(
-                center, 
-                center - new Vector2(directionIndicatorLength, 0), 
-                ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 0.7f)), 
-                2.0f
-            );
+            // West
             var westLabelSize = ImGui.CalcTextSize("W");
+            // Add background rectangle for West label - larger with higher contrast
+            drawList.AddRectFilled(
+                westLabelPos - new Vector2(westLabelSize.X * labelScale + 4, westLabelSize.Y / 2 * labelScale + 4),
+                westLabelPos + new Vector2(4, westLabelSize.Y / 2 * labelScale + 4),
+                ImGui.ColorConvertFloat4ToU32(new Vector4(0, 0, 0, 0.85f))
+            );
+            // Add outline to make it pop
+            drawList.AddRect(
+                westLabelPos - new Vector2(westLabelSize.X * labelScale + 4, westLabelSize.Y / 2 * labelScale + 4),
+                westLabelPos + new Vector2(4, westLabelSize.Y / 2 * labelScale + 4),
+                ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 0.9f)),
+                0, 0, 1.0f
+            );
+            // Draw text with brighter color
             drawList.AddText(
-                center - new Vector2(directionLabelOffset + westLabelSize.X, westLabelSize.Y / 2), 
-                ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 0.7f)), 
+                westLabelPos - new Vector2(westLabelSize.X, westLabelSize.Y / 2), 
+                ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 1.0f)), 
                 "W"
             );
             
@@ -238,94 +326,191 @@ namespace Wahdar.Windows
                 // Calculate object position relative to player
                 var relPos = obj.Position - player.Position;
                 
-                // Scale position based on radar radius and detection radius
-                var scale = (radarSize / 2) / Plugin.Configuration.DetectionRadius;
-                var screenPos = center + new Vector2(relPos.X * scale, -relPos.Z * scale);
-                
-                // Choose color based on category
-                var color = obj.Category switch
+                // Apply camera rotation if enabled
+                if (Plugin.Configuration.RotateWithCamera)
                 {
-                    ObjectCategory.Player => new Vector4(0, 0, 1, 1),
-                    ObjectCategory.Monster => new Vector4(1, 0, 0, 1),
-                    ObjectCategory.NPC or ObjectCategory.FriendlyNPC => new Vector4(1, 1, 0, 1),
-                    _ => new Vector4(0.7f, 0.7f, 0.7f, 1)
-                };
-                
-                // Draw line to player objects if enabled
-                if (DrawLinesToPlayers && obj.Category == ObjectCategory.Player)
-                {
-                    drawList.AddLine(
-                        center, 
-                        screenPos, 
-                        ImGui.ColorConvertFloat4ToU32(PlayerLineColor), 
-                        1.0f
-                    );
+                    // Convert 3D position to 2D for rotation (we only care about X and Z)
+                    var pos2D = new Vector2(relPos.X, -relPos.Z);
                     
-                    // Draw distance indicator halfway along the line
-                    var midPoint = (center + screenPos) / 2;
-                    var distanceText = $"{obj.Distance:F1}";
-                    var textSize = ImGui.CalcTextSize(distanceText);
+                    // Rotate point around origin
+                    pos2D = RotatePoint(pos2D, -cameraRotation);
                     
-                    // Draw a small background behind the text for readability
-                    drawList.AddRectFilled(
-                        midPoint - new Vector2(textSize.X / 2 + 2, textSize.Y / 2 + 2),
-                        midPoint + new Vector2(textSize.X / 2 + 2, textSize.Y / 2 + 2),
-                        ImGui.ColorConvertFloat4ToU32(new Vector4(0, 0, 0, 0.5f))
-                    );
+                    // Scale position based on radar radius and detection radius
+                    var scale = (radarSize / 2) / Plugin.Configuration.DetectionRadius;
+                    var screenPos = center + pos2D * scale;
                     
-                    drawList.AddText(
-                        midPoint - new Vector2(textSize.X / 2, textSize.Y / 2),
-                        ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 0.8f)),
-                        distanceText
-                    );
+                    // Choose color based on category
+                    var color = obj.Category switch
+                    {
+                        ObjectCategory.Player => new Vector4(0, 0, 1, 1),
+                        ObjectCategory.Monster => new Vector4(1, 0, 0, 1),
+                        ObjectCategory.NPC or ObjectCategory.FriendlyNPC => new Vector4(1, 1, 0, 1),
+                        _ => new Vector4(0.7f, 0.7f, 0.7f, 1)
+                    };
+                    
+                    // Draw line to player objects if enabled
+                    if (Plugin.Configuration.DrawPlayerLines && obj.Category == ObjectCategory.Player)
+                    {
+                        drawList.AddLine(
+                            center, 
+                            screenPos, 
+                            ImGui.ColorConvertFloat4ToU32(PlayerLineColor), 
+                            1.0f
+                        );
+                        
+                        // Draw distance indicator halfway along the line
+                        var midPoint = (center + screenPos) / 2;
+                        var distanceText = $"{obj.Distance:F1}";
+                        var textSize = ImGui.CalcTextSize(distanceText);
+                        
+                        // Draw a small background behind the text for readability
+                        drawList.AddRectFilled(
+                            midPoint - new Vector2(textSize.X / 2 + 2, textSize.Y / 2 + 2),
+                            midPoint + new Vector2(textSize.X / 2 + 2, textSize.Y / 2 + 2),
+                            ImGui.ColorConvertFloat4ToU32(new Vector4(0, 0, 0, 0.5f))
+                        );
+                        
+                        drawList.AddText(
+                            midPoint - new Vector2(textSize.X / 2, textSize.Y / 2),
+                            ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 0.8f)),
+                            distanceText
+                        );
+                    }
+                    
+                    // Draw object on radar
+                    drawList.AddCircleFilled(screenPos, 3, ImGui.ColorConvertFloat4ToU32(color));
+                    
+                    // Draw a pulsing highlight circle around recently alerted players
+                    if (obj.Category == ObjectCategory.Player && 
+                        Plugin.RecentlyAlertedPlayers.TryGetValue(obj.ObjectId, out DateTime alertTime))
+                    {
+                        var timeSinceAlert = (DateTime.Now - alertTime).TotalSeconds;
+                        float pulseProgress = (float)(timeSinceAlert % 1.0); // Cycles every second
+                        float pulseSize = 5.0f + MathF.Sin(pulseProgress * MathF.PI * 2) * 3.0f; // Oscillating size
+                        float pulseAlpha = MathF.Max(0, 1.0f - (float)(timeSinceAlert / Plugin.ALERT_HIGHLIGHT_DURATION));
+                        
+                        // Fade out over time
+                        var highlightColor = AlertedPlayerHighlight;
+                        highlightColor.W = pulseAlpha;
+                        
+                        drawList.AddCircle(
+                            screenPos, 
+                            pulseSize, 
+                            ImGui.ColorConvertFloat4ToU32(highlightColor),
+                            12, // Fewer segments
+                            2.0f // Thicker line
+                        );
+                    }
+                    
+                    // Show tooltip on hover
+                    var mousePos = ImGui.GetMousePos();
+                    if (Vector2.Distance(mousePos, screenPos) < 5)
+                    {
+                        ImGui.BeginTooltip();
+                        ImGui.TextUnformatted($"{obj.Name} ({obj.Distance:F1} yalms)");
+                        ImGui.EndTooltip();
+                    }
                 }
-                
-                // Draw object on radar
-                drawList.AddCircleFilled(screenPos, 3, ImGui.ColorConvertFloat4ToU32(color));
-                
-                // Show tooltip on hover
-                var mousePos = ImGui.GetMousePos();
-                if (Vector2.Distance(mousePos, screenPos) < 5)
+                else
                 {
-                    ImGui.BeginTooltip();
-                    ImGui.TextUnformatted($"{obj.Name} ({obj.Distance:F1} yalms)");
-                    ImGui.EndTooltip();
+                    // Original non-rotated display logic
+                    var scale = (radarSize / 2) / Plugin.Configuration.DetectionRadius;
+                    var screenPos = center + new Vector2(relPos.X * scale, -relPos.Z * scale);
+                    
+                    // Choose color based on category
+                    var color = obj.Category switch
+                    {
+                        ObjectCategory.Player => new Vector4(0, 0, 1, 1),
+                        ObjectCategory.Monster => new Vector4(1, 0, 0, 1),
+                        ObjectCategory.NPC or ObjectCategory.FriendlyNPC => new Vector4(1, 1, 0, 1),
+                        _ => new Vector4(0.7f, 0.7f, 0.7f, 1)
+                    };
+                    
+                    // Draw line to player objects if enabled
+                    if (Plugin.Configuration.DrawPlayerLines && obj.Category == ObjectCategory.Player)
+                    {
+                        drawList.AddLine(
+                            center, 
+                            screenPos, 
+                            ImGui.ColorConvertFloat4ToU32(PlayerLineColor), 
+                            1.0f
+                        );
+                        
+                        // Draw distance indicator halfway along the line
+                        var midPoint = (center + screenPos) / 2;
+                        var distanceText = $"{obj.Distance:F1}";
+                        var textSize = ImGui.CalcTextSize(distanceText);
+                        
+                        // Draw a small background behind the text for readability
+                        drawList.AddRectFilled(
+                            midPoint - new Vector2(textSize.X / 2 + 2, textSize.Y / 2 + 2),
+                            midPoint + new Vector2(textSize.X / 2 + 2, textSize.Y / 2 + 2),
+                            ImGui.ColorConvertFloat4ToU32(new Vector4(0, 0, 0, 0.5f))
+                        );
+                        
+                        drawList.AddText(
+                            midPoint - new Vector2(textSize.X / 2, textSize.Y / 2),
+                            ImGui.ColorConvertFloat4ToU32(new Vector4(1, 1, 1, 0.8f)),
+                            distanceText
+                        );
+                    }
+                    
+                    // Draw object on radar
+                    drawList.AddCircleFilled(screenPos, 3, ImGui.ColorConvertFloat4ToU32(color));
+                    
+                    // Draw a pulsing highlight circle around recently alerted players
+                    if (obj.Category == ObjectCategory.Player && 
+                        Plugin.RecentlyAlertedPlayers.TryGetValue(obj.ObjectId, out DateTime alertTime))
+                    {
+                        var timeSinceAlert = (DateTime.Now - alertTime).TotalSeconds;
+                        float pulseProgress = (float)(timeSinceAlert % 1.0); // Cycles every second
+                        float pulseSize = 5.0f + MathF.Sin(pulseProgress * MathF.PI * 2) * 3.0f; // Oscillating size
+                        float pulseAlpha = MathF.Max(0, 1.0f - (float)(timeSinceAlert / Plugin.ALERT_HIGHLIGHT_DURATION));
+                        
+                        // Fade out over time
+                        var highlightColor = AlertedPlayerHighlight;
+                        highlightColor.W = pulseAlpha;
+                        
+                        drawList.AddCircle(
+                            screenPos, 
+                            pulseSize, 
+                            ImGui.ColorConvertFloat4ToU32(highlightColor),
+                            12, // Fewer segments
+                            2.0f // Thicker line
+                        );
+                    }
+                    
+                    // Show tooltip on hover
+                    var mousePos = ImGui.GetMousePos();
+                    if (Vector2.Distance(mousePos, screenPos) < 5)
+                    {
+                        ImGui.BeginTooltip();
+                        ImGui.TextUnformatted($"{obj.Name} ({obj.Distance:F1} yalms)");
+                        ImGui.EndTooltip();
+                    }
                 }
             }
             
             // Leave space for the radar
             ImGui.Dummy(new Vector2(radarSize, radarSize));
+            
+            // Reset indent if we added any
+            if (centerPadX > 0)
+                ImGui.Unindent(centerPadX);
         }
         
-        // Helper method to draw a legend item with a colored dot
-        private void DrawLegendItem(ImDrawListPtr drawList, string label, Vector4 color, float size)
+        // Helper function to rotate a 2D point around origin
+        private Vector2 RotatePoint(Vector2 point, float angle)
         {
-            var pos = ImGui.GetCursorScreenPos();
-            drawList.AddCircleFilled(
-                pos + new Vector2(size/2, size/2), 
-                size/2, 
-                ImGui.ColorConvertFloat4ToU32(color)
+            float cs = MathF.Cos(angle);
+            float sn = MathF.Sin(angle);
+            
+            return new Vector2(
+                point.X * cs - point.Y * sn,
+                point.X * sn + point.Y * cs
             );
-            ImGui.Dummy(new Vector2(size, size));
-            ImGui.SameLine();
-            ImGui.TextUnformatted(label);
         }
         
-        // Helper method to draw a legend item with a line
-        private void DrawLegendLine(ImDrawListPtr drawList, string label, Vector4 color, float size)
-        {
-            var linePos = ImGui.GetCursorScreenPos();
-            drawList.AddLine(
-                linePos + new Vector2(0, size/2),
-                linePos + new Vector2(size, size/2),
-                ImGui.ColorConvertFloat4ToU32(color),
-                1.0f
-            );
-            ImGui.Dummy(new Vector2(size, size));
-            ImGui.SameLine();
-            ImGui.TextUnformatted(label);
-        }
-
         public void DrawInGameOverlay()
         {
             var player = Plugin.ClientState.LocalPlayer;
@@ -350,6 +535,8 @@ namespace Wahdar.Windows
                         Plugin.Configuration.InGameLineThickness);
                 }
                 
+                // Removed player indicator dot as requested by the user
+                
                 // Draw objects
                 foreach (var obj in trackedObjects)
                 {
@@ -363,7 +550,7 @@ namespace Wahdar.Windows
                     if ((obj.Category == ObjectCategory.NPC || obj.Category == ObjectCategory.FriendlyNPC) && !Plugin.Configuration.ShowNPCs)
                         continue;
                     
-                    // Choose color based on category
+                    // Pick color by object type
                     var color = obj.Category switch
                     {
                         ObjectCategory.Player => Plugin.Configuration.InGamePlayerColor,
@@ -382,7 +569,7 @@ namespace Wahdar.Windows
                     }
                     
                     // Draw line to players if enabled
-                    if (Plugin.Configuration.DrawLinesToPlayers && obj.Category == ObjectCategory.Player)
+                    if (Plugin.Configuration.DrawPlayerLines && obj.Category == ObjectCategory.Player)
                     {
                         Drawing.GameDrawing.DrawLine(
                             player.Position,
